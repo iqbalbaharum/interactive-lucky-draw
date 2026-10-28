@@ -53,6 +53,7 @@ const dog = [
 '........DDWWWWWWDD........',
 '........DDDDDDDDDD........'];
 const spriteCache = new Map<string, HTMLCanvasElement>();
+let idleNameCache: { key: string; window: number; names: string[] } | null = null;
 const palette: Record<string,string> = {G:'#157644',K:'#162c2b',W:'#fff4d3',O:'#ef9a38',P:'#ad4278',B:'#553d2e',D:'#bd692f'};
 
 function sprite(ctx: CanvasRenderingContext2D, rows: string[], x: number, y: number, scale=2, flip=false, bodyColor?:string) {
@@ -85,8 +86,13 @@ function scene(ctx: CanvasRenderingContext2D, w: number, h: number, now: number,
     // Keep the field readable: at most 30 eligible people are walking at once.
     // A duck travels completely beyond an edge before that slot receives a new,
     // randomly selected participant and direction for its next crossing.
-    const total=eligibleNames.length;const visible=Math.min(total,30);const cycleLength=17;
-    for(let i=0;i<visible;i++){const shifted=now+i*.53;const crossing=Math.floor(shifted/cycleLength);const elapsed=shifted-crossing*cycleLength;const journey=8+random(crossing*43+i*17)*7;if(elapsed>journey)continue;const progress=elapsed/journey;const fromLeft=random(crossing*101+i*37)>.5;const x=(fromLeft?progress:1-progress)*(w+120)-60;const left=!fromLeft;const nameIndex=Math.floor(random(crossing*79+i*29+total)*total);const name=eligibleNames[nameIndex];const scale=duckScale(name);const walking=Math.sin(now*10+i)>0;const y=ground-2-11*scale+(walking?0:1);sprite(ctx,duck,x,y,scale,left,duckColor(name));rect(x+(walking?5.5*scale:9*scale),ground-3,Math.max(3,2.5*scale),2,'#ef9a38');const label=shortName(name);ctx.save();ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.lineWidth=3;ctx.strokeStyle='#11271e';ctx.strokeText(label,x+8*scale,y-7);ctx.fillStyle='#fff4d3';ctx.fillText(label,x+8*scale,y-7);ctx.restore();}
+    // A shuffled, deduplicated roster is shared by every walking slot. This
+    // prevents the same name appearing on two ducks at once, even as slots
+    // independently enter and leave the field.
+    const rosterKey=eligibleNames.join('\u0000');const rosterWindow=Math.floor(now/30);
+    if(!idleNameCache||idleNameCache.key!==rosterKey||idleNameCache.window!==rosterWindow){const names=[...new Set(eligibleNames)];for(let j=names.length-1;j>0;j--){const swap=Math.floor(random(rosterWindow*997+j*31)* (j+1));[names[j],names[swap]]=[names[swap],names[j]];}idleNameCache={key:rosterKey,window:rosterWindow,names};}
+    const roster=idleNameCache.names;const total=roster.length;const visible=Math.min(total,30);const cycleLength=17;
+    for(let i=0;i<visible;i++){const shifted=now+i*.53;const crossing=Math.floor(shifted/cycleLength);const elapsed=shifted-crossing*cycleLength;const journey=8+random(crossing*43+i*17)*7;if(elapsed>journey)continue;const progress=elapsed/journey;const fromLeft=random(crossing*101+i*37)>.5;const x=(fromLeft?progress:1-progress)*(w+120)-60;const left=!fromLeft;const name=roster[i];const scale=duckScale(name);const walking=Math.sin(now*10+i)>0;const y=ground-2-11*scale+(walking?0:1);sprite(ctx,duck,x,y,scale,left,duckColor(name));rect(x+(walking?5.5*scale:9*scale),ground-3,Math.max(3,2.5*scale),2,'#ef9a38');const label=shortName(name);ctx.save();ctx.font='bold 10px monospace';ctx.textAlign='center';ctx.lineWidth=3;ctx.strokeStyle='#11271e';ctx.strokeText(label,x+8*scale,y-7);ctx.fillStyle='#fff4d3';ctx.fillText(label,x+8*scale,y-7);ctx.restore();}
   }
   if(phase==='sniff') {
     const x=-85+Math.min(1,elapsed/1100)*(w*.35+85);const bob=Math.sin(now*14)>0?1:0;
