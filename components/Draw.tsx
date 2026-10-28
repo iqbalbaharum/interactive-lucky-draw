@@ -66,11 +66,14 @@ function random(seed:number) { const value=Math.sin(seed*12.9898)*43758.5453;ret
 function shortName(name:string) { return name.length>19?`${name.slice(0,18)}…`:name; }
 function duckColor(name:string) { const code=(name.trim().charAt(0).toUpperCase().charCodeAt(0)||65)-65;if(code<5)return '#ef7c3d';if(code<10)return '#e4b936';if(code<15)return '#4ba95d';if(code<20)return '#4b86c3';return '#ad5bb5'; }
 function duckScale(name:string) { return Math.round(Math.min(2.5,1.45+Math.min(name.length,35)*.032)*4)/4; }
-function scene(ctx: CanvasRenderingContext2D, w: number, h: number, now: number, phase: Phase, elapsed: number, birds: FlyingDuck[], targetDuck: number, eligibleNames: string[]) {
+function scene(ctx: CanvasRenderingContext2D, w: number, h: number, now: number, phase: Phase, elapsed: number, birds: FlyingDuck[], targetDuck: number, eligibleNames: string[], promoQr: HTMLImageElement | null) {
   const ground=h-30; const rect=(x:number,y:number,a:number,b:number,c:string)=>{ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),Math.ceil(a),Math.ceil(b));};
   rect(0,0,w,h,'#3fb8f4');
   // A few deliberately blocky, quiet clouds.
   for(let i=0;i<3;i++){const x=(w*.30+i*w*.29+now*1.3)%(w+140)-70;const y=36+i%2*32;rect(x,y,40,8,'#8bd9f7');rect(x+9,y-6,23,8,'#8bd9f7');}
+  // The registration invitation belongs to the resting field only. Once a
+  // draw begins, the scene is intentionally clear for the duck sequence.
+  if(phase==='idle'&&promoQr){const cardW=Math.min(188,w*.28),cardH=184,cardX=w-cardW-18,cardY=18,qrSize=108,qrX=cardX+(cardW-qrSize)/2,qrY=cardY+57;rect(cardX,cardY,cardW,cardH,'#fffdf5');rect(cardX,cardY,cardW,4,'#173025');rect(cardX,cardY+cardH-4,cardW,4,'#173025');rect(cardX,cardY,4,cardH,'#173025');rect(cardX+cardW-4,cardY,4,cardH,'#173025');ctx.save();ctx.textAlign='center';ctx.fillStyle='#426438';ctx.font='bold 7px monospace';ctx.fillText('DAFTAR UNTUK CABUTAN BERTUAH',cardX+cardW/2,cardY+16);ctx.fillStyle='#173025';ctx.font='bold 8px monospace';ctx.fillText('JALINAN KASIH ZON',cardX+cardW/2,cardY+29);ctx.fillText('SEGAMAT BARU',cardX+cardW/2,cardY+39);ctx.drawImage(promoQr,Math.round(qrX),qrY,qrSize,qrSize);ctx.fillStyle='#426438';ctx.font='bold 7px monospace';ctx.fillText('IMBAS UNTUK DAFTAR',cardX+cardW/2,cardY+177);ctx.restore();}
   // Trunk and angular branches.
   const tx=w*.14;
   ctx.save();ctx.translate(tx,ground);const treeScale=Math.min(1,(ground-18)/250);ctx.scale(treeScale,treeScale);ctx.translate(-tx,-ground);
@@ -130,6 +133,7 @@ function scene(ctx: CanvasRenderingContext2D, w: number, h: number, now: number,
 
 export default function Draw() {
   const canvas=useRef<HTMLCanvasElement>(null);const screen=useRef<HTMLDivElement>(null);
+  const promoQr=useRef<HTMLImageElement|null>(null);
   const flock=useRef<{key:string;simulation:FlockSimulation} | null>(null);
   const timing=useRef({phase:'idle' as Phase,start:0}); const audio=useRef<AudioContext|null>(null);const muted=useRef(true);
   const [phase,setPhase]=useState<Phase>('idle');const [sound,setSound]=useState(false);const [round,setRound]=useState(0);const [full,setFull]=useState(false);const [status,setStatus]=useState<PublicStatus>({eligibleCount:0,totalCount:0,eligibleNames:[],activeDraw:null});const [completionError,setCompletionError]=useState('');const [completing,setCompleting]=useState(false);
@@ -140,12 +144,13 @@ export default function Draw() {
   const change=useCallback((next:Phase)=>{timing.current={phase:next,start:performance.now()};setPhase(next);},[]);
   const enableSound=useCallback(async()=>{if(!audio.current){const Context=window.AudioContext||(window as typeof window&{webkitAudioContext?:typeof AudioContext}).webkitAudioContext;if(!Context)return;audio.current=new Context();}await audio.current.resume();muted.current=false;setSound(true);},[]);
   useEffect(()=>()=>{void audio.current?.close();},[]);
+  useEffect(()=>{const image=new Image();image.src='/registration-qr.png';image.onload=()=>{promoQr.current=image;};return()=>{image.onload=null;};},[]);
   useEffect(()=>{if(!sound)return;const timers:number[]=[];const later=(fn:()=>void,delay:number)=>timers.push(window.setTimeout(fn,delay));if(phase==='sniff'){noise(.09,.018);later(()=>noise(.07,.012),420);later(()=>tone(138,.08,'triangle',.025),840);}if(phase==='shot'){noise(.18,.12);tone(98,.32,'sawtooth',.09);later(()=>tone(460,.48,'square',.03),110);}if(phase==='retrieve'){tone(180,.12,'square',.035);later(()=>tone(220,.12,'square',.035),180);later(()=>tone(160,.16,'triangle',.03),480);}if(phase==='winner'){[523,659,784,1047].forEach((note,index)=>later(()=>tone(note,.22,'square',.045),index*150));}return()=>timers.forEach(window.clearTimeout);},[noise,phase,sound,tone]);
   useEffect(()=>{if(!sound||phase!=='flight')return;const melody=[262,0,330,0,392,330,294,0,262,0,392,0,440,392,330,0];let index=0;const play=()=>{const note=melody[index++%melody.length];if(note)tone(note,.17,'square',.012);};play();const music=window.setInterval(play,300);const wings=window.setInterval(()=>tone(760,.045,'triangle',.006),650);return()=>{window.clearInterval(music);window.clearInterval(wings);};},[phase,sound,tone]);
   useEffect(()=>{
     let raf=0;const durations:Partial<Record<Phase,number>>={sniff:2100,shot:850,retrieve:1700};
     const next:Partial<Record<Phase,Phase>>={sniff:'flight',shot:'retrieve',retrieve:'winner'};
-    function frame(now:number){const c=canvas.current;const state=timing.current;if(c){const ctx=c.getContext('2d');if(ctx){ctx.imageSmoothingEnabled=false;const flockSize=status.activeDraw?.eligibleCount ?? status.eligibleCount;const drawId=status.activeDraw?.id ?? 0;const targetDuck=flockSize ? drawId % flockSize : 0;let birds:FlyingDuck[]=[];if(state.phase==='flight'||state.phase==='shot'){const key=`${drawId}:${flockSize}:${c.width}:${c.height}`;if(flock.current?.key!==key)flock.current={key,simulation:new FlockSimulation(flockSize,c.width,c.height-30,drawId)};birds=flock.current.simulation.advanceTo(state.phase==='shot'?2.5:(now-state.start)/1000);}else if(state.phase==='idle'||state.phase==='sniff')flock.current=null;scene(ctx,c.width,c.height,now/1000,state.phase,now-state.start,birds,targetDuck,status.eligibleNames??[]);}}
+    function frame(now:number){const c=canvas.current;const state=timing.current;if(c){const ctx=c.getContext('2d');if(ctx){ctx.imageSmoothingEnabled=false;const flockSize=status.activeDraw?.eligibleCount ?? status.eligibleCount;const drawId=status.activeDraw?.id ?? 0;const targetDuck=flockSize ? drawId % flockSize : 0;let birds:FlyingDuck[]=[];if(state.phase==='flight'||state.phase==='shot'){const key=`${drawId}:${flockSize}:${c.width}:${c.height}`;if(flock.current?.key!==key)flock.current={key,simulation:new FlockSimulation(flockSize,c.width,c.height-30,drawId)};birds=flock.current.simulation.advanceTo(state.phase==='shot'?2.5:(now-state.start)/1000);}else if(state.phase==='idle'||state.phase==='sniff')flock.current=null;scene(ctx,c.width,c.height,now/1000,state.phase,now-state.start,birds,targetDuck,status.eligibleNames??[],promoQr.current);}}
       if(durations[state.phase]&&now-state.start>=durations[state.phase]!)change(next[state.phase]!);raf=requestAnimationFrame(frame);}
     raf=requestAnimationFrame(frame);return()=>cancelAnimationFrame(raf);
   },[change,status]);
