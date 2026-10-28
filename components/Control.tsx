@@ -58,14 +58,15 @@ export default function Control() {
 
   const active = status.activeDraw;
   const readyToHit = active?.status === 'flocking' && now - new Date(active.startedAt).getTime() >= 2100;
-  const startDisabled = Boolean(busy || active || status.eligibleCount === 0);
+  const startingNextRound = active?.status === 'reserved';
+  const startDisabled = Boolean(busy || active?.status === 'flocking' || status.eligibleCount === 0);
   const hitDisabled = Boolean(busy || !readyToHit);
   const stateLabel = active?.status === 'flocking' ? `DRAW #${active.id} · DUCKS FLYING` : active?.status === 'reserved' ? `DRAW #${active.id} · WINNER ON STAGE` : `${status.eligibleCount} ELIGIBLE DUCKS`;
   return <main className="control-screen">
     <div className="control-top"><a href="/admin">← ADMIN</a><span role="status" aria-live="polite">{stateLabel}</span><a href="/draw" target="_blank" rel="noreferrer">STAGE ↗</a></div>
     {message && <p className="control-banner" role="alert">{message}</p>}
     <div className="control-actions">
-      <button className="control-action control-start" disabled={startDisabled} onClick={() => void action('start')}><span className="control-icon" aria-hidden="true">▶</span><strong>START</strong><small>{busy === 'start' ? 'STARTING…' : active ? 'DRAW IN PROGRESS' : status.eligibleCount ? 'SEND DUCKS FLYING' : 'WAITING FOR PARTICIPANTS'}</small></button>
+      <button className="control-action control-start" disabled={startDisabled} onClick={() => void action('start')}><span className="control-icon" aria-hidden="true">▶</span><strong>{startingNextRound ? 'START NEXT ROUND' : 'START'}</strong><small>{busy === 'start' ? 'STARTING…' : startingNextRound ? 'RECORD WINNER & SEND DUCKS FLYING' : active ? 'DRAW IN PROGRESS' : status.eligibleCount ? 'SEND DUCKS FLYING' : 'WAITING FOR PARTICIPANTS'}</small></button>
       <button className="control-action control-hit" disabled={hitDisabled} onClick={() => void action('hit')}><span className="control-icon" aria-hidden="true">✦</span><strong>HIT</strong><small>{busy === 'hit' ? 'SELECTING WINNER…' : readyToHit ? 'SHOOT & SELECT WINNER' : active?.status === 'flocking' ? 'DOG IS SNIFFING…' : active ? 'WINNER ON STAGE' : 'PRESS START FIRST'}</small></button>
     </div>
   </main>;

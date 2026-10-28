@@ -73,8 +73,11 @@ export const database = {
   async publicStatus(): Promise<PublicStatus> { const [counts, eligibleNames, activeDraw] = await Promise.all([this.counts(), this.eligibleNames(), this.activeDraw()]); return { ...counts, eligibleNames, activeDraw }; },
   async startDraw(): Promise<ActiveDraw> { return transactional(async connection => {
     await connection.query('SELECT id FROM event_lock WHERE id = 1 FOR UPDATE');
-    const [active] = await connection.query<DrawRow[]>("SELECT id FROM draws WHERE status IN ('flocking','reserved') LIMIT 1 FOR UPDATE");
-    if (active[0]) throw new Error('A draw is already in progress.');
+    const [active] = await connection.query<DrawRow[]>("SELECT * FROM draws WHERE status IN ('flocking','reserved') LIMIT 1 FOR UPDATE");
+    if (active[0]?.status === 'flocking') throw new Error('A draw is already in progress.');
+    // Pressing Start after Hit is the operator's confirmation to save the
+    // displayed winner and immediately launch the following round.
+    if (active[0]?.status === 'reserved') await connection.execute("UPDATE draws SET status = 'completed', completed_at = UTC_TIMESTAMP(3) WHERE id = ? AND status = 'reserved'", [active[0].id]);
     const [created] = await connection.execute<any>("INSERT INTO draws (eligible_count, status, started_at) VALUES (0, 'flocking', UTC_TIMESTAMP(3))");
     const id = Number(created.insertId);
     const [snapshot] = await connection.execute<any>('INSERT INTO draw_candidates (draw_id, participant_id) SELECT ?, id FROM participants WHERE winner_draw_id IS NULL', [id]);
@@ -102,7 +105,7 @@ export const database = {
     const [rows] = await connection.query<DrawRow[]>('SELECT * FROM draws WHERE id = ?', [draw.id]);
     return activeDrawFromRow(rows[0]);
   }); },
-  async completeDraw(id: number) { return withDb(async () => { const [result] = await pool.execute<any>('UPDATE draws SET status = \'completed\', completed_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = \'reserved\'', [id]); return result.affectedRows === 1; }); },
+  async completeDraw(id: number) { return withDb(async () => { const [result] = await pool.execute<any>('UPDATE draws SET status = \'completed\', completed_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = \'reserved\'', [id]); if (result.affectedRows === 1) return true; const [draws] = await pool.query<DrawRow[]>('SELECT status FROM draws WHERE id = ?', [id]); return draws[0]?.status === 'completed'; }); },
   async invalidateWinner(id: number) {
     return transactional(async connection => {
       // Serialize eligibility changes with selection of the next winner.
