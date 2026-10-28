@@ -4,10 +4,10 @@ An interactive Duck Hunt-style lucky draw. The canvas artwork is drawn locally i
 
 ## Run
 
-Requires Node.js 22+ and Docker Compose.
+Local development requires Node.js 22+ and Docker Compose. Production runs the app in the included Node 22 Docker image.
 
 1. Copy `.env.example` to `.env` and replace both passwords with random values. The initial deployment already has a private `.env` generated.
-2. `docker compose up -d --wait`
+2. `docker compose up -d --wait mysql`
 3. `npm install`
 4. `npm run dev`
 5. Open http://localhost:3020/draw
@@ -16,7 +16,7 @@ Requires Node.js 22+ and Docker Compose.
 
 ## Database
 
-MySQL 8.4 runs as `duck-draw-mysql`, bound only to `127.0.0.1:3307`. The application user owns the `duck_draw` database; root credentials are separate. The `mysql_data` named volume persists across container recreation. Do not use `docker compose down -v` unless you intend to erase the database.
+MySQL 8.4 runs privately within the Docker network. The application user owns the `duck_draw` database; root credentials are separate. The `mysql_data` named volume persists across container recreation. Do not use `docker compose down -v` unless you intend to erase the database.
 
 `npm run db:check` verifies application-user connectivity and writes a temporary verification record. After container recreation, `npm run db:check -- --read` verifies persistence; `npm run db:check -- --cleanup` removes the verification table. The preview does not query the database or store participant data.
 
@@ -38,3 +38,10 @@ In **Previous winners**, choose **Invalidate & return to draw** and confirm to m
 Run `npm run db:migrate` after starting MySQL to prepare the persistent schema. The first app request also runs the same safe, idempotent migration.
 
 Start snapshots the eligible participant pool, so registrations received while ducks are flying go into the next draw. Hit cryptographically selects and reserves one participant from that snapshot. Closing the winner modal completes the draw and makes the participant ineligible for later draws.
+
+## Production deployment
+
+1. Clone the repository on the server, then copy `.env.example` to `.env` and replace every password and secret.
+2. Start the private MySQL and app stack with `docker compose up -d --build --wait`.
+3. Install `deploy/jalinan-kasih.sekijang-ai.xyz.conf` as an Nginx site, validate Nginx, then run `sudo certbot --nginx -d jalinan-kasih.sekijang-ai.xyz`.
+4. Verify `https://jalinan-kasih.sekijang-ai.xyz/register`, `/admin`, `/control`, and `/draw`.
