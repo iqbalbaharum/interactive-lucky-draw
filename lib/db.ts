@@ -19,10 +19,10 @@ export function ensureSchema() {
       INDEX participants_eligible (winner_draw_id, id)
     ) ENGINE=InnoDB`);
     await pool.query(`CREATE TABLE IF NOT EXISTS draws (
-      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, participant_id BIGINT UNSIGNED NOT NULL,
-      winner_name VARCHAR(120) NOT NULL, winner_phone VARCHAR(20) NOT NULL, eligible_count INT UNSIGNED NOT NULL,
-      status ENUM('reserved','completed') NOT NULL DEFAULT 'reserved',
-      started_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), completed_at DATETIME(3) NULL,
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, participant_id BIGINT UNSIGNED NULL,
+      winner_name VARCHAR(120) NULL, winner_phone VARCHAR(20) NULL, eligible_count INT UNSIGNED NOT NULL,
+      status ENUM('flocking','reserved','completed') NOT NULL DEFAULT 'flocking',
+      started_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3), shot_at DATETIME(3) NULL, completed_at DATETIME(3) NULL,
       INDEX draws_active (status, id), INDEX draws_history (completed_at, id)
     ) ENGINE=InnoDB`);
     await pool.query(`CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -34,6 +34,20 @@ export function ensureSchema() {
       try { await pool.query('ALTER TABLE draws ADD COLUMN invalidated_at DATETIME(3) NULL'); }
       catch (error: any) { if (error.code !== 'ER_DUP_FIELDNAME') throw error; }
     }
+    const [shotColumns] = await pool.query<any[]>("SHOW COLUMNS FROM draws LIKE 'shot_at'");
+    if (!shotColumns.length) await pool.query('ALTER TABLE draws ADD COLUMN shot_at DATETIME(3) NULL');
+    const [drawColumns] = await pool.query<any[]>("SHOW COLUMNS FROM draws WHERE Field IN ('participant_id', 'winner_name', 'winner_phone', 'status')");
+    for (const column of drawColumns) {
+      if (column.Field === 'participant_id' && column.Null === 'NO') await pool.query('ALTER TABLE draws MODIFY participant_id BIGINT UNSIGNED NULL');
+      if (column.Field === 'winner_name' && column.Null === 'NO') await pool.query('ALTER TABLE draws MODIFY winner_name VARCHAR(120) NULL');
+      if (column.Field === 'winner_phone' && column.Null === 'NO') await pool.query('ALTER TABLE draws MODIFY winner_phone VARCHAR(20) NULL');
+      if (column.Field === 'status' && !column.Type.includes('flocking')) await pool.query("ALTER TABLE draws MODIFY status ENUM('flocking','reserved','completed') NOT NULL DEFAULT 'flocking'");
+    }
+    await pool.query(`CREATE TABLE IF NOT EXISTS draw_candidates (
+      draw_id BIGINT UNSIGNED NOT NULL, participant_id BIGINT UNSIGNED NOT NULL,
+      PRIMARY KEY (draw_id, participant_id),
+      CONSTRAINT draw_candidates_draw FOREIGN KEY (draw_id) REFERENCES draws(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB`);
     await pool.query(`CREATE TABLE IF NOT EXISTS event_lock (id TINYINT NOT NULL PRIMARY KEY) ENGINE=InnoDB`);
     await pool.query('INSERT IGNORE INTO event_lock (id) VALUES (1)');
   })();
@@ -41,27 +55,52 @@ export function ensureSchema() {
 }
 
 async function withDb<T>(fn: () => Promise<T>) { await ensureSchema(); return fn(); }
+function asUtc(value: string | null) { return value ? new Date(`${String(value).replace(' ', 'T')}Z`).toISOString() : null; }
+function activeDrawFromRow(draw: DrawRow): ActiveDraw {
+  return {
+    id: Number(draw.id), startedAt: asUtc(draw.started_at)!, shotAt: asUtc(draw.shot_at),
+    eligibleCount: Number(draw.eligible_count), status: draw.status as ActiveDraw['status'],
+    winner: draw.winner_name && draw.winner_phone ? { fullName: draw.winner_name, maskedPhone: maskPhone(draw.winner_phone) } : null,
+  };
+}
 
 export const database = {
   async counts() { return withDb(async () => { const [rows] = await pool.query<any[]>('SELECT COUNT(*) AS totalCount, SUM(winner_draw_id IS NULL) AS eligibleCount FROM participants'); return { totalCount: Number(rows[0].totalCount || 0), eligibleCount: Number(rows[0].eligibleCount || 0) }; }); },
   async eligibleNames() { return withDb(async () => { const [rows] = await pool.query<ParticipantRow[]>('SELECT full_name FROM participants WHERE winner_draw_id IS NULL ORDER BY id'); return rows.map(row => row.full_name); }); },
   async duplicate(phone: string, icNumber: string) { return withDb(async () => { const [rows] = await pool.query<any[]>('SELECT phone, ic_number FROM participants WHERE phone = ? OR ic_number = ?', [phone, icNumber]); return { phone: rows.some(r => r.phone === phone), icNumber: rows.some(r => r.ic_number === icNumber) }; }); },
   async register(fullName: string, phone: string, icNumber: string) { return withDb(async () => { const [result] = await pool.execute<any>('INSERT INTO participants (full_name, phone, ic_number) VALUES (?, ?, ?)', [fullName, phone, icNumber]); return Number(result.insertId); }); },
-  async activeDraw(): Promise<ActiveDraw | null> { return withDb(async () => { const [rows] = await pool.query<DrawRow[]>('SELECT * FROM draws WHERE status = \'reserved\' ORDER BY id DESC LIMIT 1'); const draw = rows[0]; if (!draw) return null; const timestamp = `${String(draw.started_at).replace(' ', 'T')}Z`; return { id: Number(draw.id), startedAt: new Date(timestamp).toISOString(), eligibleCount: Number(draw.eligible_count), winner: { fullName: draw.winner_name, maskedPhone: maskPhone(draw.winner_phone) } }; }); },
+  async activeDraw(): Promise<ActiveDraw | null> { return withDb(async () => { const [rows] = await pool.query<DrawRow[]>("SELECT * FROM draws WHERE status IN ('flocking','reserved') ORDER BY id DESC LIMIT 1"); const draw = rows[0]; if (!draw) return null; return activeDrawFromRow(draw); }); },
   async publicStatus(): Promise<PublicStatus> { const [counts, eligibleNames, activeDraw] = await Promise.all([this.counts(), this.eligibleNames(), this.activeDraw()]); return { ...counts, eligibleNames, activeDraw }; },
-  async startDraw(): Promise<ActiveDraw> { return withDb(async () => {
-    const connection = await pool.getConnection();
-    try { await connection.beginTransaction(); await connection.query('SELECT id FROM event_lock WHERE id = 1 FOR UPDATE');
-      const [active] = await connection.query<DrawRow[]>('SELECT * FROM draws WHERE status = \'reserved\' LIMIT 1 FOR UPDATE');
-      if (active[0]) throw new Error('A draw is already in progress.');
-      const [countRows] = await connection.query<any[]>('SELECT COUNT(*) AS count FROM participants WHERE winner_draw_id IS NULL'); const count = Number(countRows[0].count);
-      if (!count) throw new Error('There are no eligible participants.');
-      const offset = randomInt(count); const [people] = await connection.query<ParticipantRow[]>('SELECT * FROM participants WHERE winner_draw_id IS NULL ORDER BY id LIMIT ?, 1 FOR UPDATE', [offset]); const person = people[0];
-      const [created] = await connection.execute<any>('INSERT INTO draws (participant_id, winner_name, winner_phone, eligible_count) VALUES (?, ?, ?, ?)', [person.id, person.full_name, person.phone, count]); const id = Number(created.insertId);
-      await connection.execute('UPDATE participants SET winner_draw_id = ? WHERE id = ? AND winner_draw_id IS NULL', [id, person.id]);
-      await connection.commit(); const [drawRows] = await connection.query<DrawRow[]>('SELECT * FROM draws WHERE id = ?', [id]); const draw = drawRows[0];
-      return { id, startedAt: new Date(draw.started_at).toISOString(), eligibleCount: count, winner: { fullName: person.full_name, maskedPhone: maskPhone(person.phone) } };
-    } catch (error) { await connection.rollback(); throw error; } finally { connection.release(); }
+  async startDraw(): Promise<ActiveDraw> { return transactional(async connection => {
+    await connection.query('SELECT id FROM event_lock WHERE id = 1 FOR UPDATE');
+    const [active] = await connection.query<DrawRow[]>("SELECT id FROM draws WHERE status IN ('flocking','reserved') LIMIT 1 FOR UPDATE");
+    if (active[0]) throw new Error('A draw is already in progress.');
+    const [created] = await connection.execute<any>("INSERT INTO draws (eligible_count, status, started_at) VALUES (0, 'flocking', UTC_TIMESTAMP(3))");
+    const id = Number(created.insertId);
+    const [snapshot] = await connection.execute<any>('INSERT INTO draw_candidates (draw_id, participant_id) SELECT ?, id FROM participants WHERE winner_draw_id IS NULL', [id]);
+    const count = Number(snapshot.affectedRows);
+    if (!count) throw new Error('There are no eligible participants.');
+    await connection.execute('UPDATE draws SET eligible_count = ? WHERE id = ?', [count, id]);
+    const [rows] = await connection.query<DrawRow[]>('SELECT * FROM draws WHERE id = ?', [id]);
+    return activeDrawFromRow(rows[0]);
+  }); },
+  async hitDraw(): Promise<ActiveDraw> { return transactional(async connection => {
+    await connection.query('SELECT id FROM event_lock WHERE id = 1 FOR UPDATE');
+    const [active] = await connection.query<DrawRow[]>("SELECT * FROM draws WHERE status = 'flocking' LIMIT 1 FOR UPDATE");
+    const draw = active[0];
+    if (!draw) throw new Error('Start a draw before pressing Hit.');
+    const [elapsed] = await connection.query<any[]>('SELECT TIMESTAMPDIFF(MICROSECOND, started_at, UTC_TIMESTAMP(3)) AS microseconds FROM draws WHERE id = ?', [draw.id]);
+    if (Number(elapsed[0].microseconds) < 2_100_000) throw new Error('Let the dog finish sniffing before pressing Hit.');
+    const [countRows] = await connection.query<any[]>('SELECT COUNT(*) AS count FROM draw_candidates WHERE draw_id = ?', [draw.id]);
+    const count = Number(countRows[0].count);
+    if (!count) throw new Error('This draw has no eligible participants.');
+    const [people] = await connection.query<ParticipantRow[]>('SELECT p.* FROM draw_candidates c JOIN participants p ON p.id = c.participant_id WHERE c.draw_id = ? AND p.winner_draw_id IS NULL ORDER BY c.participant_id LIMIT ?, 1 FOR UPDATE', [draw.id, randomInt(count)]);
+    const person = people[0];
+    if (!person) throw new Error('The draw pool changed. Please try again.');
+    await connection.execute('UPDATE participants SET winner_draw_id = ? WHERE id = ? AND winner_draw_id IS NULL', [draw.id, person.id]);
+    await connection.execute("UPDATE draws SET participant_id = ?, winner_name = ?, winner_phone = ?, status = 'reserved', shot_at = UTC_TIMESTAMP(3) WHERE id = ? AND status = 'flocking'", [person.id, person.full_name, person.phone, draw.id]);
+    const [rows] = await connection.query<DrawRow[]>('SELECT * FROM draws WHERE id = ?', [draw.id]);
+    return activeDrawFromRow(rows[0]);
   }); },
   async completeDraw(id: number) { return withDb(async () => { const [result] = await pool.execute<any>('UPDATE draws SET status = \'completed\', completed_at = CURRENT_TIMESTAMP(3) WHERE id = ? AND status = \'reserved\'', [id]); return result.affectedRows === 1; }); },
   async invalidateWinner(id: number) {

@@ -1,5 +1,5 @@
 export type Winner = { fullName: string; maskedPhone: string };
-export type ActiveDraw = { id: number; startedAt: string; eligibleCount: number; winner: Winner };
+export type ActiveDraw = { id: number; startedAt: string; shotAt: string | null; eligibleCount: number; status: 'flocking' | 'reserved'; winner: Winner | null };
 export type PublicStatus = { eligibleCount: number; totalCount: number; eligibleNames: string[]; activeDraw: ActiveDraw | null };
 
 import type { RowDataPacket } from 'mysql2';
@@ -9,6 +9,6 @@ export type ParticipantRow = RowDataPacket & {
 };
 
 export type DrawRow = RowDataPacket & {
-  id: number; participant_id: number; winner_name: string; winner_phone: string; eligible_count: number;
-  status: 'reserved' | 'completed'; started_at: string; completed_at: string | null; invalidated_at: string | null;
+  id: number; participant_id: number | null; winner_name: string | null; winner_phone: string | null; eligible_count: number;
+  status: 'flocking' | 'reserved' | 'completed'; started_at: string; shot_at: string | null; completed_at: string | null; invalidated_at: string | null;
 };

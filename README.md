@@ -1,6 +1,6 @@
 # Duck Draw
 
-An interactive `/draw` design preview. Registration, administration, and real winner selection are intentionally deferred until design review. All demo winners are fictional. The canvas artwork is drawn locally in code; the scene uses pixel sprites inspired by the supplied references.
+An interactive Duck Hunt-style lucky draw. The canvas artwork is drawn locally in code; the scene uses pixel sprites inspired by the supplied references.
 
 ## Run
 
@@ -12,7 +12,7 @@ Requires Node.js 22+ and Docker Compose.
 4. `npm run dev`
 5. Open http://localhost:3020/draw
 
-The page is an edge-to-edge game with an integrated HUD. Click **Demo Draw** to enable browser audio and start the sequence: side-view dog sniffing, 600 ducks flying for 2.5 seconds, a shot and falling duck, then a front-view dog holding the duck and the fictional winner reveal. The flock uses cached pixel sprites, varied deterministic flight paths, and direction-aware facing. Closing the fictional winner modal enables **Replay Demo**. Sound and fullscreen controls are in the upper-right corner. Fonts use Google Fonts with local system fallbacks.
+`/draw` is an edge-to-edge stage with sound and fullscreen controls. `/control` provides the two event actions: **Start** runs the dog sniff and keeps the eligible flock flying; **Hit** selects one winner and starts the shot, falling duck, retrieval, and winner reveal. The flock uses cached pixel sprites, varied deterministic flight paths, and direction-aware facing.
 
 ## Database
 
@@ -31,9 +31,10 @@ MySQL 8.4 runs as `duck-draw-mysql`, bound only to `127.0.0.1:3307`. The applica
 In **Previous winners**, choose **Invalidate & return to draw** and confirm to make a completed winner eligible again. The participant count updates automatically. The old draw stays in history marked invalidated, and repeat requests cannot add the participant twice or clear a later win.
 
 - `/register` is the public mobile registration page. It requires full name, a Malaysian mobile number, and a 12-digit Malaysian IC number. Duplicate phone numbers and IC numbers are rejected.
-- `/admin` is the shared-password control room. It shows live counts, participants, winner history, and starts a draw. **Set `ADMIN_PASSWORD` and `SESSION_SECRET` in `.env` before opening it.**
-- `/draw` is the full-screen stage. It polls the live status each second and uses the eligible count at draw start for its flock size.
+- `/admin` is the shared-password event room. It shows live counts, participants, winner history, links to the control screen, and opens the stage. **Set `ADMIN_PASSWORD` and `SESSION_SECRET` in `.env` before opening it.**
+- `/control` is the shared-password, phone-friendly controller. It has two large actions: Start and Hit.
+- `/draw` is the full-screen stage. It polls live status each second and uses the participant snapshot made at Start for its flock size.
 
 Run `npm run db:migrate` after starting MySQL to prepare the persistent schema. The first app request also runs the same safe, idempotent migration.
 
-A started draw reserves the cryptographically selected winner before animation. Closing the winner modal completes the draw and makes the participant ineligible for all later draws. The stage must be opened from the signed-in event computer so it can complete the active draw.
+Start snapshots the eligible participant pool, so registrations received while ducks are flying go into the next draw. Hit cryptographically selects and reserves one participant from that snapshot. Closing the winner modal completes the draw and makes the participant ineligible for later draws.

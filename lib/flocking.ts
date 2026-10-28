@@ -48,7 +48,7 @@ export class FlockSimulation {
   }
 
   advanceTo(seconds: number) {
-    const targetTick = Math.floor(Math.max(0, Math.min(2.5, seconds)) / STEP);
+    const targetTick = Math.floor(Math.max(0, seconds) / STEP);
     while (this.tick < targetTick) { this.step(); this.tick++; }
     return this.birds;
   }
