@@ -125,12 +125,17 @@ function scene(ctx: CanvasRenderingContext2D, w: number, h: number, now: number,
 export default function Draw() {
   const canvas=useRef<HTMLCanvasElement>(null);const screen=useRef<HTMLDivElement>(null);
   const flock=useRef<{key:string;simulation:FlockSimulation} | null>(null);
-  const timing=useRef({phase:'idle' as Phase,start:0}); const audio=useRef<AudioContext|null>(null);const muted=useRef(false);
-  const [phase,setPhase]=useState<Phase>('idle');const [sound,setSound]=useState(true);const [round,setRound]=useState(0);const [full,setFull]=useState(false);const [status,setStatus]=useState<PublicStatus>({eligibleCount:0,totalCount:0,eligibleNames:[],activeDraw:null});const [completionError,setCompletionError]=useState('');const [completing,setCompleting]=useState(false);
+  const timing=useRef({phase:'idle' as Phase,start:0}); const audio=useRef<AudioContext|null>(null);const muted=useRef(true);
+  const [phase,setPhase]=useState<Phase>('idle');const [sound,setSound]=useState(false);const [round,setRound]=useState(0);const [full,setFull]=useState(false);const [status,setStatus]=useState<PublicStatus>({eligibleCount:0,totalCount:0,eligibleNames:[],activeDraw:null});const [completionError,setCompletionError]=useState('');const [completing,setCompleting]=useState(false);
   const tone=useCallback((freq:number,duration:number,type:OscillatorType='square',volume=.025)=>{
     if(muted.current||!audio.current)return;const ac=audio.current;const oscillator=ac.createOscillator();const gain=ac.createGain();oscillator.type=type;oscillator.frequency.setValueAtTime(freq,ac.currentTime);oscillator.frequency.exponentialRampToValueAtTime(Math.max(40,freq*.45),ac.currentTime+duration);gain.gain.setValueAtTime(volume,ac.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ac.currentTime+duration);oscillator.connect(gain);gain.connect(ac.destination);oscillator.start();oscillator.stop(ac.currentTime+duration);
   },[]);
-  const change=useCallback((next:Phase)=>{timing.current={phase:next,start:performance.now()};setPhase(next);if(next==='shot')tone(110,.25,'sawtooth',.08);if(next==='flight')tone(700,.12);if(next==='winner')tone(880,.65,'triangle',.07);},[tone]);
+  const noise=useCallback((duration:number,volume:number)=>{if(muted.current||!audio.current)return;const ac=audio.current;const buffer=ac.createBuffer(1,Math.ceil(ac.sampleRate*duration),ac.sampleRate);const data=buffer.getChannelData(0);for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*(1-i/data.length);const source=ac.createBufferSource();const filter=ac.createBiquadFilter();const gain=ac.createGain();filter.type='highpass';filter.frequency.value=700;gain.gain.setValueAtTime(volume,ac.currentTime);gain.gain.exponentialRampToValueAtTime(.001,ac.currentTime+duration);source.buffer=buffer;source.connect(filter);filter.connect(gain);gain.connect(ac.destination);source.start();source.stop(ac.currentTime+duration);},[]);
+  const change=useCallback((next:Phase)=>{timing.current={phase:next,start:performance.now()};setPhase(next);},[]);
+  const enableSound=useCallback(async()=>{if(!audio.current){const Context=window.AudioContext||(window as typeof window&{webkitAudioContext?:typeof AudioContext}).webkitAudioContext;if(!Context)return;audio.current=new Context();}await audio.current.resume();muted.current=false;setSound(true);},[]);
+  useEffect(()=>()=>{void audio.current?.close();},[]);
+  useEffect(()=>{if(!sound)return;const timers:number[]=[];const later=(fn:()=>void,delay:number)=>timers.push(window.setTimeout(fn,delay));if(phase==='sniff'){noise(.09,.018);later(()=>noise(.07,.012),420);later(()=>tone(138,.08,'triangle',.025),840);}if(phase==='shot'){noise(.18,.12);tone(98,.32,'sawtooth',.09);later(()=>tone(460,.48,'square',.03),110);}if(phase==='retrieve'){tone(180,.12,'square',.035);later(()=>tone(220,.12,'square',.035),180);later(()=>tone(160,.16,'triangle',.03),480);}if(phase==='winner'){[523,659,784,1047].forEach((note,index)=>later(()=>tone(note,.22,'square',.045),index*150));}return()=>timers.forEach(window.clearTimeout);},[noise,phase,sound,tone]);
+  useEffect(()=>{if(!sound||phase!=='flight')return;const melody=[262,0,330,0,392,330,294,0,262,0,392,0,440,392,330,0];let index=0;const play=()=>{const note=melody[index++%melody.length];if(note)tone(note,.17,'square',.012);};play();const music=window.setInterval(play,300);const wings=window.setInterval(()=>tone(760,.045,'triangle',.006),650);return()=>{window.clearInterval(music);window.clearInterval(wings);};},[phase,sound,tone]);
   useEffect(()=>{
     let raf=0;const durations:Partial<Record<Phase,number>>={sniff:2100,shot:850,retrieve:1700};
     const next:Partial<Record<Phase,Phase>>={sniff:'flight',shot:'retrieve',retrieve:'winner'};
@@ -149,7 +154,7 @@ export default function Draw() {
     <section className="field" aria-label="Duck Hunt lucky draw stage" data-phase={phase} data-flock-size={flockSize}>
       <canvas ref={canvas} aria-label={`Pixel art hunting scene: ${labels[phase]}`}/>
       <div className="game-tools">
-        <button onClick={()=>{muted.current=!muted.current;setSound(!muted.current);}} aria-label={sound?'Mute sound':'Enable sound'} title={sound?'Mute sound':'Enable sound'}>{sound?'♪':'♩'}</button>
+        <button onClick={()=>void(sound?(muted.current=true,setSound(false)):enableSound())} aria-label={sound?'Mute sound':'Enable sound'} title={sound?'Mute sound':'Enable sound'}>{sound?'♪':'♩'}</button>
         <button onClick={()=>void fullscreen()} aria-label="Toggle fullscreen" title={full?'Exit fullscreen':'Fullscreen'}>⛶</button>
       </div>
       {phase==='winner'&&<div className="modal-backdrop"><section className="winner-modal" role="dialog" aria-modal="true" aria-labelledby="winner-title">
